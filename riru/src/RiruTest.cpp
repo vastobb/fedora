@@ -480,11 +480,11 @@ FILE *fopenDetour(const char *path, const char *mode) {
 
 int fcloseDetour(FILE *f) {
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::unique_lock<std::mutex> lock(g_mutex);
     auto it = g_memFiles.find(f);
     if (it != g_memFiles.end()) {
       g_memFiles.erase(it);
-      report("fclose sub");
+      report::log("fclose sub");
       lock.unlock();
       // SAVED original: ::fclose would re-enter this detour forever
       return g_fcloseOrig ? g_fcloseOrig(f) : EOF;
