@@ -1,4 +1,4 @@
-// Riru Test v1.0.14 — vanilla main-menu button via HBUI patch (in-memory).
+// Riru Test v1.0.15 — vanilla main-menu button via HBUI patch (in-memory).
 //
 // Goal: a "Riru" button between Play and Settings IN the vanilla Minecraft
 // main menu (1.26.52), identical UI/texture, click = no-op (test only).
@@ -62,6 +62,10 @@ constexpr const char *kButtonName = "Riru Test Button";
 void logInfo(const char *msg) {
   __android_log_print(ANDROID_LOG_INFO, kLogTag, "%s", msg);
 }
+
+namespace hbui {
+extern std::string g_dumpDir;
+} // namespace hbui
 
 // ---- File reporter: no-logcat diagnostics ---------------------------
 // Writes RIRU_* lines to the app's EXTERNAL dir so they can be copied out
@@ -180,6 +184,7 @@ void init(JavaVM *vm, const char *ver) {
     return;
   }
   g_path = dir + "/riru_report.txt";
+  hbui::g_dumpDir = dir;
   const int fd =
       open(g_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0) {
@@ -310,6 +315,8 @@ struct Tracked {
   bool ready = false;
   bool patched = false;
   bool js = false;
+  bool dump = false;
+  std::string aname;
   int memFd = -1;
 };
 
@@ -318,6 +325,9 @@ std::unordered_map<AAsset *, Tracked> g_files;
 std::unordered_map<FILE *, int> g_memFiles; // our substituted FILE* -> memfd (fclose closes)
 std::unordered_map<AAssetDir *, std::string> g_dirs;
 long g_nextLogged = 0;
+std::string g_dumpDir; // set from report dir at init
+bool g_dumpedBrarchive = false;
+bool g_dumpedRoutes = false;
 long g_hbuiOpens = 0;
 long g_fopenHits = 0;
 // Dedup logging: first sight of each unique path (bounded set). Boot scans
@@ -340,23 +350,33 @@ void logFirst(const char *tag, const char *name,
   report::log(b);
 }
 
-enum class Kind { None, Html, JsBundle };
+enum class Kind { None, Html, JsBundle, Dump };
+
+bool isDumpTarget(const char *name, bool &isRoutes) {
+  isRoutes = false;
+  if (!name) {
+    return false;
+  }
+  if (std::strstr(name, "routes.json") != nullptr) {
+    isRoutes = true;
+    return true;
+  }
+  return std::strstr(name, "oreui") != nullptr &&
+         std::strstr(name, "__brarchive") != nullptr;
+}
 
 Kind classify(const char *name) {
-  if (!name) {
-    return Kind::None;
-  }
   const bool hb = std::strstr(name, "hbui") != nullptr;
   if (std::strstr(name, "index.html") != nullptr) {
-    // Broadened v1.0.14: accept bare "index.html" too (dir enumeration can
+    // Broadened v1.0.15: accept bare "index.html" too (dir enumeration can
     // yield names whose full form we never see statically). Content gate
     // (looksHtml) + Play/Settings-sibling check in JS keep this safe:
     // non-menu pages get an inert script.
     return Kind::Html;
   }
   (void)hb;
-  // Hashed HBUI bundle (e.g. index-<HASH>.js): appending our payload runs it
-  // as part of an already-allowed script (no inline-CSP dependence).
+  // NB: the OREUI UI pack ships as assets/resource_packs/oreui/__brarchive.brarchive
+  // (single archive; confirmed open on device). index.html/bundle live inside it.
   size_t n = std::strlen(name);
   if (hb && n > 3 && name[n - 1] == 's' && name[n - 2] == 'j' &&
       name[n - 3] == '.' && std::strstr(name, "map") == nullptr) {
@@ -398,6 +418,30 @@ bool looksHtml(const unsigned char *d, size_t n) {
     }
   }
   return false;
+}
+
+bool writeDump(const char *fname, const unsigned char *data, size_t len) {
+  if (g_dumpDir.empty() || !fname || !data || !len) {
+    return false;
+  }
+  const std::string path = g_dumpDir + "/" + fname;
+  const int fd =
+      open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    return false;
+  }
+  size_t wrote = 0;
+  while (wrote < len) {
+    const ssize_t n =
+        write(fd, data + wrote, len - wrote);
+    if (n <= 0) {
+      close(fd);
+      return false;
+    }
+    wrote += (size_t)n;
+  }
+  close(fd);
+  return true;
 }
 
 std::vector<unsigned char> buildPatched(const unsigned char *orig, size_t len,
@@ -446,6 +490,24 @@ void ensureReady(AAsset *asset, Tracked &t) {
     orig.insert(orig.end(), tmp, tmp + n);
   }
   if ((off_t)orig.size() != total) {
+    return;
+  }
+  if (t.dump) {
+    // Dump-only: persist for offline format analysis, serve original bytes.
+    const bool isRoutes = (aname && std::strstr(aname, "routes") != nullptr);
+    const char *fn =
+        isRoutes ? "routes_dump.json" : "oreui_dump.brarchive";
+    bool *done = isRoutes ? &g_dumpedRoutes : &g_dumpedBrarchive;
+    if (!*done) {
+      *done = true;
+      const bool w = writeDump(fn, orig.data(), orig.size());
+      char b[160];
+      std::snprintf(b, sizeof(b), "RIRU dumped %s %zu bytes %s", fn,
+                    orig.size(), w ? "OK" : "WRITE-FAIL");
+      report::log(b);
+      __android_log_print(ANDROID_LOG_INFO, kLogTag, "%s", b);
+    }
+    t.bytes = std::move(orig);
     return;
   }
   const bool ok = t.js ? looksJs(orig.data(), orig.size())
@@ -819,7 +881,12 @@ AAsset *openDetour(AAssetManager *mgr, const char *filename, int mode) {
     ++g_hbuiOpens;
     if (asset) {
       Tracked t;
-      t.js = (classify(filename) == Kind::JsBundle);
+      const Kind k = classify(filename);
+      t.js = (k == Kind::JsBundle);
+      t.dump = (k == Kind::Dump);
+      if (filename) {
+        t.aname = filename;
+      }
       g_files.emplace(asset, std::move(t));
     }
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
@@ -857,7 +924,7 @@ int readDetour(AAsset *asset, void *buf, size_t count) {
     lock.unlock();
     return g_readOrig ? g_readOrig(asset, buf, count) : -1;
   }
-  ensureReady(asset, *t);
+  ensureReady(asset, *t, t->aname.c_str());
   if (t->bytes.empty()) {
     // bounded-drain refused: fall back to live original reads
     lock.unlock();
@@ -880,7 +947,7 @@ off_t lengthDetour(AAsset *asset) {
     lock.unlock();
     return g_lengthOrig ? g_lengthOrig(asset) : 0;
   }
-  ensureReady(asset, *t);
+  ensureReady(asset, *t, t->aname.c_str());
   if (!t->bytes.empty()) {
     return (off_t)t->bytes.size();
   }
@@ -895,7 +962,7 @@ const void *bufferDetour(AAsset *asset, off_t *outLen) {
     lock.unlock();
     return g_bufferOrig ? g_bufferOrig(asset, outLen) : nullptr;
   }
-  ensureReady(asset, *t);
+  ensureReady(asset, *t, t->aname.c_str());
   if (!t->bytes.empty()) {
     if (outLen) {
       *outLen = (off_t)t->bytes.size();
@@ -913,7 +980,7 @@ int openFdDetour(AAsset *asset, off_t *outStart, off_t *outLength) {
     lock.unlock();
     return g_openFdOrig ? g_openFdOrig(asset, outStart, outLength) : -1;
   }
-  ensureReady(asset, *t);
+  ensureReady(asset, *t, t->aname.c_str());
   if (t->bytes.empty()) {
     lock.unlock();
     return g_openFdOrig ? g_openFdOrig(asset, outStart, outLength) : -1;
@@ -1138,10 +1205,10 @@ public:
     auto &self = getSelf();
     std::error_code ec;
     std::filesystem::create_directories(self.getConfigDir(), ec);
-    self.getLogger().info("Riru Test load v1.0.14: id={} name={}", self.getId(),
+    self.getLogger().info("Riru Test load v1.0.15: id={} name={}", self.getId(),
                           self.getName());
-    logInfo("Riru load v1.0.14");
-    report::init(self.getJavaVM(), "v1.0.14");
+    logInfo("Riru load v1.0.15");
+    report::init(self.getJavaVM(), "v1.0.15");
     report::log("RIRU load: report ready");
     const int hooks = hbui::install();
     self.getLogger().info("Riru HBUI hooks: {}/16", hooks);
@@ -1155,7 +1222,7 @@ public:
 
   bool enable() {
     auto &self = getSelf();
-    logInfo("Riru enable v1.0.14 step1: register module + callbacks");
+    logInfo("Riru enable v1.0.15 step1: register module + callbacks");
     const bool moduleOk =
         pl::modmenu::ModuleBuilder(kModuleId, kModuleName)
             .defaultEnabled(true)
@@ -1163,37 +1230,37 @@ public:
             .onConfigChanged([](std::string_view, std::string_view, std::string_view) {})
             .onKeybind([](std::string_view, std::string_view, bool) {})
             .registerModule();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.14 step1 module=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.15 step1 module=%d",
                         (int)moduleOk);
     if (!moduleOk) {
-      self.getLogger().error("Riru v1.0.14: module register failed");
+      self.getLogger().error("Riru v1.0.15: module register failed");
       return false;
     }
 
-    logInfo("Riru enable v1.0.14 step2: register button + event");
+    logInfo("Riru enable v1.0.15 step2: register button + event");
     const bool buttonOk =
         pl::modmenu::ButtonBuilder(kButtonId, kButtonName)
             .moduleId(kModuleId)
             .label("Riru")
             .onEvent([](std::string_view, pl::modmenu::ButtonEvent, float) {})
             .registerButton();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.14 step2 button=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.15 step2 button=%d",
                         (int)buttonOk);
     if (!buttonOk) {
-      self.getLogger().error("Riru v1.0.14: button register failed");
+      self.getLogger().error("Riru v1.0.15: button register failed");
       pl::modmenu::unregisterModule(kModuleId);
       return false;
     }
 
-    self.getLogger().info("Riru Test enable v1.0.14 OK");
-    logInfo("Riru enable v1.0.14 OK");
+    self.getLogger().info("Riru Test enable v1.0.15 OK");
+    logInfo("Riru enable v1.0.15 OK");
     return true;
   }
 
   bool disable() {
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
-    logInfo("Riru disable v1.0.14");
+    logInfo("Riru disable v1.0.15");
     return true;
   }
 
@@ -1201,7 +1268,7 @@ public:
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
     hbui::reset();
-    logInfo("Riru unload v1.0.14");
+    logInfo("Riru unload v1.0.15");
     return true;
   }
 
