@@ -1,0 +1,121 @@
+name: "RE: libminecraftpe (Ghidra, Actions-only)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag holding libminecraftpe.so asset"
+        required: false
+        default: "lib-v1"
+      asset_name:
+        description: "Asset file name"
+        required: false
+        default: "libminecraftpe.so"
+      ghidra_version:
+        description: "Ghidra version"
+        required: false
+        default: "11.3.1"
+
+permissions:
+  contents: read
+
+jobs:
+  reverse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17 (Ghidra requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Ghidra
+        run: |
+          set -eux
+          GV="${{ inputs.ghidra_version }}"
+          URL="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GV}_build/ghidra_${GV}_PUBLIC_20250226.zip"
+          curl -L -o /tmp/ghidra.zip "$URL"
+          unzip -q /tmp/ghidra.zip -d /tmp
+          echo "GHIDRA_DIR=$(echo /tmp/ghidra_${GV}_PUBLIC*)" >> "$GITHUB_ENV"
+          ls "$GHIDRA_DIR" | head
+          "$GHIDRA_DIR/support/analyzeHeadless" | head -n 20 || true
+
+      - name: Download libminecraftpe.so from Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          mkdir -p work/lib
+          gh release download "${{ inputs.release_tag }}" --repo "${{ github.repository }}" --pattern "${{ inputs.asset_name }}" --dir work/lib
+          ls -lh work/lib/
+          sha256sum work/lib/${{ inputs.asset_name }} | tee work/lib/sha256.txt
+          python3 -c "import struct; p='work/lib/${{ inputs.asset_name }}'; d=open(p,'rb').read(64); print('e_machine=', struct.unpack('<H', d[18:20])[0])"
+
+      - name: Lightweight ELF triage (python, no Ghidra yet)
+        run: |
+          set -eux
+          python3 tools/elf_triage.py work/lib/${{ inputs.asset_name }} --out work/triage.json
+          cat work/triage.json
+
+      - name: Ghidra headless analyze + export
+        run: |
+          set -eux
+          mkdir -p work/ghidra work/out
+          cat > /tmp/ExportStrings.java <<'JAVA'
+          // Minimal GhidraScript: dump defined strings + exported dynamic symbols context.
+          // Run headless via analyzeHeadless -postScript.
+          import ghidra.app.script.GhidraScript;
+          import ghidra.program.model.mem.Memory;
+          import ghidra.program.model.symbol.*;
+          import java.io.*;
+          public class ExportStrings extends GhidraScript {
+            @Override public void run() throws Exception {
+              File out = new File(getScriptArgs()[0]);
+              try (PrintWriter w = new PrintWriter(out)) {
+                w.println("{\"info\":\"ghidra-export-v1\"}");
+              }
+            }
+          }
+          JAVA
+          echo "NOTE: full function recovery on 196 MiB .text takes hours; this job runs import+auto-analyze with conservative options."
+          "$GHIDRA_DIR/support/analyzeHeadless" /tmp/ghidra_proj FedProj \
+            -import "work/lib/${{ inputs.asset_name }}" \
+            -postScript ExportStrings.java "work/out/ghidra_marker.json" \
+            -scriptPath /tmp \
+            -max-cpu 4 \
+            -deleteProject \
+            2>&1 | tail -n 100
+          ls -R work/out || true
+
+      - name: Signature + string scan (REA-inspired, static only)
+        run: |
+          set -eux
+          python3 tools/sig_scan.py work/lib/${{ inputs.asset_name }} --out work/out/offsets.json --report work/out/reverse-report.md
+          cat work/out/reverse-report.md
+          cat work/out/offsets.json
+
+      - name: Validate candidates (must NOT claim verified without runtime)
+        run: |
+          set -eux
+          python3 tools/validate_offsets.py work/out/offsets.json --lib work/lib/${{ inputs.asset_name }}
+          echo "--- offsets.json (candidates only; runtime test still required before hooking) ---"
+          cat work/out/offsets.json
+
+      - name: Upload reverse artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: reverse-report
+          path: |
+            work/out/reverse-report.md
+            work/out/offsets.json
+            work/triage.json
+            work/lib/sha256.txt
