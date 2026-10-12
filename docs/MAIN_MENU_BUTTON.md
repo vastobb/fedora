@@ -38,4 +38,6 @@ User requirement: a `Riru` test button **inside Minecraft's own main menu**, vis
 - [ ] User runs v1.0.5, returns `adb logcat -s RiruTest | grep RIRU_HBUI` (proves exact hbui asset path).
 - [x] Decision with evidence: resource-pack override DEAD for OreUI (bedrock.dev: hardcoded, not pack-modifiable); C++ model hook deferred (needs Ghidra vtable recovery); CHOSEN: in-memory `/hbui/index.html` patch via AAsset hooks (assethook + oreUIShim + nixware precedent).
 - [x] riru v1.0.6 serves patched HTML (original bytes + DOM-clone script) with safe fallbacks; needs no APK files, no hashes, no offsets.
-- [ ] User installs v1.0.6 clean, screenshots main menu: Riru button between Play and Settings = done. If absent (and no crash), report: menu intact? ModMenu card present? -> v1.0.7 adds fopen/disk-path coverage.
+- [x] v1.0.6 showed nothing -> traced loader deeper: `gui/dist/` prefix + install-file layout (`Content/data/gui/dist/hbui`) mean hbui likely lives on DISK, not APK assets (AAsset hooks never fire).
+- [x] v1.0.7 adds `fopen`/`fclose` interception (memfd+fdopen serving, write modes pass through) alongside AAsset.
+- [ ] User installs v1.0.7 clean, screenshots main menu: Riru button between Play and Settings = done. If absent with menu intact -> raw-fd/C++-fstream path remains; v1.0.8 follows the evidence.
