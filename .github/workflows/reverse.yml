@@ -42,12 +42,24 @@ jobs:
         run: |
           set -eux
           GV="${{ inputs.ghidra_version }}"
-          URL="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GV}_build/ghidra_${GV}_PUBLIC_20250226.zip"
-          curl -L -o /tmp/ghidra.zip "$URL"
+          # Resolve correct PUBLIC date per version (11.3.1 = 20250219). Fall back to gh API lookup.
+          if [ "$GV" = "11.3.1" ]; then DATE="20250219"; else DATE="20250219"; fi
+          # Try version-specific asset first, then query API for exact name
+          URL="https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GV}_build/ghidra_${GV}_PUBLIC_${DATE}.zip"
+          echo "Trying $URL"
+          if ! curl -L --fail -o /tmp/ghidra.zip "$URL"; then
+            echo "Fixed URL failed, resolving via API..."
+            ASSET=$(gh api repos/NationalSecurityAgency/ghidra/releases/tags/Ghidra_${GV}_build --jq '.assets[0].browser_download_url' 2>/dev/null || true)
+            echo "API asset: $ASSET"
+            [ -n "$ASSET" ] && curl -L --fail -o /tmp/ghidra.zip "$ASSET"
+          fi
+          ls -lh /tmp/ghidra.zip
           unzip -q /tmp/ghidra.zip -d /tmp
           echo "GHIDRA_DIR=$(echo /tmp/ghidra_${GV}_PUBLIC*)" >> "$GITHUB_ENV"
           ls "$GHIDRA_DIR" | head
           "$GHIDRA_DIR/support/analyzeHeadless" | head -n 20 || true
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Download libminecraftpe.so from Release
         env:
