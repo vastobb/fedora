@@ -470,13 +470,14 @@ std::vector<unsigned char> buildPatched(const unsigned char *orig, size_t len,
 
 // Drain the real stream (bounded) and prepare serve bytes. Always leaves a
 // servable buffer: patched HTML on success, original bytes otherwise.
-void ensureReady(AAsset *asset, Tracked &t) {
+void ensureReady(AAsset *asset, Tracked &t, const char *aname) {
   if (t.ready || !g_readOrig || !g_lengthOrig) {
     return;
   }
   t.ready = true;
   const off_t total = g_lengthOrig(asset);
-  if (total <= 0 || total > kMaxPatchBytes) {
+  const off_t cap = t.dump ? (off_t)(96 * 1024 * 1024) : kMaxPatchBytes;
+  if (total <= 0 || total > cap) {
     return; // serve nothing extra; reads fall through? (see readDetour)
   }
   std::vector<unsigned char> orig;
