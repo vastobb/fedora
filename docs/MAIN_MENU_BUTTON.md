@@ -36,6 +36,6 @@ User requirement: a `Riru` test button **inside Minecraft's own main menu**, vis
 - [x] riru v1.0.2 probes the 7 on-device and logs `RIRU_SIG` lines, installs zero hooks (test-before-use).
 - [x] v1.0.4 runs crash-free on device (user screenshots: vanilla menu + Levi Riru Test Enabled card).
 - [ ] User runs v1.0.5, returns `adb logcat -s RiruTest | grep RIRU_HBUI` (proves exact hbui asset path).
-- [ ] HBUI main-menu file acquired from 1.26.52 APK (`hbui/index.html` JS hash + start-screen route).
-- [ ] Override-vs-hook decision with evidence.
-- [ ] `riru` shows Bedrock-level button between Play and Settings, no-op, no crash (user-confirmed via screenshot).
+- [x] Decision with evidence: resource-pack override DEAD for OreUI (bedrock.dev: hardcoded, not pack-modifiable); C++ model hook deferred (needs Ghidra vtable recovery); CHOSEN: in-memory `/hbui/index.html` patch via AAsset hooks (assethook + oreUIShim + nixware precedent).
+- [x] riru v1.0.6 serves patched HTML (original bytes + DOM-clone script) with safe fallbacks; needs no APK files, no hashes, no offsets.
+- [ ] User installs v1.0.6 clean, screenshots main menu: Riru button between Play and Settings = done. If absent (and no crash), report: menu intact? ModMenu card present? -> v1.0.7 adds fopen/disk-path coverage.
