@@ -1,0 +1,109 @@
+{
+  "lib_sha256": "5f5baf8e9ded92432e4c2cc9ff58a9313245323e8ca53ce37c169cc720e757c4",
+  "lib_size": 328419680,
+  "note": "candidates only \u2014 NOT runtime-verified. Do not hook without testing.",
+  "rodata_counts": {
+    "OreUI": 7798,
+    "StartScreen": 15,
+    "PlayScreen": 226,
+    "MainMenu": 265,
+    "ScreenController": 3852,
+    "StartMenu": 45,
+    "createScreen": 2,
+    "1.21.": 20
+  },
+  "version_strings": [
+    {
+      "s": "1.21.80",
+      "n": 4
+    },
+    {
+      "s": "1.21.110",
+      "n": 4
+    },
+    {
+      "s": "1.21.90",
+      "n": 4
+    },
+    {
+      "s": "1.21.120",
+      "n": 3
+    },
+    {
+      "s": "1.21.60",
+      "n": 1
+    },
+    {
+      "s": "1.21.130",
+      "n": 1
+    },
+    {
+      "s": "1.21.0",
+      "n": 1
+    },
+    {
+      "s": "1.21.40",
+      "n": 1
+    },
+    {
+      "s": "1.21.70",
+      "n": 1
+    }
+  ],
+  "startscreen_contexts": [
+    {
+      "rodata_off": 45938182,
+      "ctx": "OBAL__N_140UIScreenTechStackSelectorInitializerAnon22registerPreStartScreenERN2ui23ScreenTechStackSelectorER15IOptionRegistrybbE3$_0NS_9all"
+    },
+    {
+      "rodata_off": 45938347,
+      "ctx": "OBAL__N_140UIScreenTechStackSelectorInitializerAnon22registerPreStartScreenERN2ui23ScreenTechStackSelectorER15IOptionRegistrybbE3$_0.NSt6__"
+    },
+    {
+      "rodata_off": 45938517,
+      "ctx": "OBAL__N_140UIScreenTechStackSelectorInitializerAnon22registerPreStartScreenERN2ui23ScreenTechStackSelectorER15IOptionRegistrybbE3$_1NS_9all"
+    },
+    {
+      "rodata_off": 45938682,
+      "ctx": "OBAL__N_140UIScreenTechStackSelectorInitializerAnon22registerPreStartScreenERN2ui23ScreenTechStackSelectorER15IOptionRegistrybbE3$_1.NSt6__"
+    },
+    {
+      "rodata_off": 46380818,
+      "ctx": "OreUI11EntryPoints17PlayerPermissionsE.N5OreUI11EntryPoints14PreStartScreenE.N5OreUI11EntryPoints15RealmsAllowListE.N5OreUI11EntryPoints18R"
+    },
+    {
+      "rodata_off": 46381177,
+      "ctx": "Count.NSt6__ndk110__function6__funcIZZNK5OreUI11EntryPoints14PreStartScreen12addToMatcherERNS2_12RouteMatcherER12SceneFactoryRKN3gsl8not_nu"
+    },
+    {
+      "rodata_off": 46381372,
+      "ctx": "EPKcEUlvE_NS_9allocatorISL_EEFbvEEE.ZZNK5OreUI11EntryPoints14PreStartScreen12addToMatcherERNS_12RouteMatcherER12SceneFactoryRKN3gsl8not_nul"
+    },
+    {
+      "rodata_off": 46381571,
+      "ctx": "UlvE_.NSt6__ndk110__function6__funcIZZNK5OreUI11EntryPoints14PreStartScreen12addToMatcherERNS2_12RouteMatcherER12SceneFactoryRKN3gsl8not_nu"
+    },
+    {
+      "rodata_off": 46381820,
+      "ctx": "locatorIcEEEEE_NSO_IST_EEFSQ_SS_EEE.ZZNK5OreUI11EntryPoints14PreStartScreen12addToMatcherERNS_12RouteMatcherER12SceneFactoryRKN3gsl8not_nul"
+    },
+    {
+      "rodata_off": 46382087,
+      "ctx": "EEEE_.NSt6__ndk110__function6__funcIZZNK5OreUI11EntryPoints14PreStartScreen12addToMatcherERNS2_12RouteMatcherER12SceneFactoryRKN3gsl8not_nu"
+    }
+  ],
+  "candidates": [
+    {
+      "id": "oreui-startflow",
+      "desc": "OreUI StartScreen/ScreenController string refs in .rodata; resolve callers in Ghidra XREFs",
+      "status": "candidate",
+      "evidence": "StartScreen x15, ScreenController x3852 in .rodata"
+    },
+    {
+      "id": "mainmenu-rodata",
+      "desc": "MainMenu/PlayScreen refs; Ghidra: find code XREFs to these .rodata addresses for button factory",
+      "status": "candidate",
+      "evidence": "MainMenu x265, PlayScreen x226"
+    }
+  ]
+}

@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -25,14 +25,15 @@ jobs:
           java-version: "17"
 
       - name: Setup Android NDK r27
-        uses: android-actions/setup-android@v3
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          packages: platform-tools platforms;android-34 ndk;27.2.12479018 cmake;3.22.1 ninja
+          ndk-version: r27
 
       - name: Configure (arm64-v8a)
         run: |
           set -eux
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          export ANDROID_NDK_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
           cmake -S riru -B build/riru \
             -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \

@@ -1,0 +1,148 @@
+{
+  "path": "/emulated/libminecraftpe.so",
+  "size": 328419680,
+  "e_machine": 183,
+  "e_phnum": 13,
+  "sections": [
+    {
+      "name": "",
+      "off": 0,
+      "size": 0
+    },
+    {
+      "name": ".note.android.ident",
+      "off": 324927488,
+      "size": 152
+    },
+    {
+      "name": ".note.gnu.build-id",
+      "off": 324927640,
+      "size": 36
+    },
+    {
+      "name": ".dynsym",
+      "off": 324927680,
+      "size": 2200224
+    },
+    {
+      "name": ".gnu.version",
+      "off": 327127904,
+      "size": 183352
+    },
+    {
+      "name": ".gnu.version_r",
+      "off": 327311264,
+      "size": 128
+    },
+    {
+      "name": ".gnu.hash",
+      "off": 2384440,
+      "size": 715424
+    },
+    {
+      "name": ".dynstr",
+      "off": 3099864,
+      "size": 8385475
+    },
+    {
+      "name": ".rela.dyn",
+      "off": 11485344,
+      "size": 24185592
+    },
+    {
+      "name": ".rela.plt",
+      "off": 327311392,
+      "size": 1100928
+    },
+    {
+      "name": ".rodata",
+      "off": 36771840,
+      "size": 20433952
+    },
+    {
+      "name": ".gcc_except_table",
+      "off": 57205792,
+      "size": 9292748
+    },
+    {
+      "name": ".eh_frame_hdr",
+      "off": 66498540,
+      "size": 6033892
+    },
+    {
+      "name": ".eh_frame",
+      "off": 72532432,
+      "size": 33137420
+    },
+    {
+      "name": ".text",
+      "off": 105669856,
+      "size": 205828044
+    },
+    {
+      "name": "malloc_hook",
+      "off": 311497900,
+      "size": 768
+    },
+    {
+      "name": ".plt",
+      "off": 311498672,
+      "size": 733968
+    },
+    {
+      "name": ".data.rel.ro",
+      "off": 312232640,
+      "size": 9079696
+    },
+    {
+      "name": ".fini_array",
+      "off": 321312336,
+      "size": 16
+    },
+    {
+      "name": ".init_array",
+      "off": 321312352,
+      "size": 18624
+    },
+    {
+      "name": ".dynamic",
+      "off": 328417280,
+      "size": 608
+    },
+    {
+      "name": ".got",
+      "off": 321331552,
+      "size": 77232
+    },
+    {
+      "name": ".got.plt",
+      "off": 321408784,
+      "size": 366992
+    },
+    {
+      "name": ".relro_padding",
+      "off": 321775776,
+      "size": 1888
+    },
+    {
+      "name": ".data",
+      "off": 321775776,
+      "size": 233048
+    },
+    {
+      "name": ".bss",
+      "off": 322008824,
+      "size": 2879056
+    },
+    {
+      "name": ".comment",
+      "off": 322008824,
+      "size": 1177
+    },
+    {
+      "name": ".shstrtab",
+      "off": 322010001,
+      "size": 287
+    }
+  ]
+}

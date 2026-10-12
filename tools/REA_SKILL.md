@@ -1,6 +1,8 @@
 # REA skill — what was used and how
 
-Source: [`morluto/rea`](https://github.com/morluto/rea) — “Reverse Engineer Anything”, MCP for native/JS/.NET/web targets. Checked via `gh api repos/morluto/rea/...` (no local install, no heavy run).
+Source: [`morluto/rea`](https://github.com/morluto/rea) — “Reverse Engineer Anything”, MCP for native/JS/.NET/web targets.
+Downloaded 1st via shallow clone `git clone --depth 1 https://github.com/morluto/rea.git /tmp/rea` (no setup, no heavy run).
+Upstream version verified: `rea-agents 6.4.0` (`/tmp/rea/package.json`), skills at `.agents/skills/{reverse-engineer-anything,rea-changelog-update,rea-tool-design}`.
 
 ## What was taken (methodology only)
 
