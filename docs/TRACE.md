@@ -102,7 +102,8 @@ nearby constants are unrelated (crash keys, tick settings, client IDs).
 | `AAsset_getBuffer` zero-copy | yes | drains, returns patched pointer |
 | `AAsset_openFileDescriptor` (uncompressed) | yes | serves `memfd_create` fd with patched bytes |
 | `fopen` disk files (`gui/dist/...` on disk, not APK) | YES (v1.0.7) | `fopen`/`fclose` hooked via `dlsym(RTLD_DEFAULT)`, original fully read, patched bytes served through `memfd_create`+`fdopen` (real fd: fstat/seek/mmap correct). Write/append modes pass through untouched. |
-| raw `open`/`openat` fds, C++ fstreams | NO (only if both above miss) | would need temp-file path redirect; deferred |
+| raw `open`/`openat` fds, C++ fstreams | YES (v1.0.11) | `__open_2` IS imported (exact); `open`/`openat` hooked process-wide for other libs. Drain via raw syscalls (no recursion), serve via memfd (real-fd semantics), variadic-correct forwarding. |
+| IDA Free pkg in /emulated (x86_64 Arch build) | N/A here | wrong arch for this aarch64 host; Ghidra 12.1.4 + Capstone cover the work |
 | CoHTML custom-scheme handler internals | N/A (lands in one of the above) | — |
 
 Every hook guarded; any failure or non-HTML content → original bytes (menu
