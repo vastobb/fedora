@@ -37,3 +37,13 @@ User-quoted `/storage/emulated/0/Android/media/org.levimc.launcher/crash_logs/` 
 ## 4. Main-menu button (between Play and Settings, Bedrock 1.26.52)
 
 Unchanged plan, see `docs/MAIN_MENU_BUTTON.md` + `docs/HOOKING.md`: menu is HBUI/OreUI data-driven (`/hbui/index.html` + hashed JS bundle, `MainMenuScreenModel/Controller`); no Levi SDK API for it; 7/8 BedrockTools signatures match 1.26.52 (`ClientInstanceUpdate` needs Ghidra re-find). v1.0.3 carries no game hooks. After the bisection result: re-add ModMenu fields one by one (v1.0.4+), then HBUI override (needs 1.26.52's exact `index-*.js` hash from `base.apk.levi`) or a confirmed hook.
+
+## 5. Real root cause (v1.0.4, proven by build failure)
+
+v1.0.4 (all callbacks incl. `.onKeybind`) **failed to compile** against `preloader@0.2.3`:
+
+```text
+RiruTest.cpp:71:14: error: no member named 'onKeybind' in 'pl::modmenu::ModuleBuilder'
+```
+
+So tag `0.2.3` LACKS `onKeybind`, while device libpreloader (Levi 1.5.27, submodule `5d108da`, which implements floating-button visibility) HAS it — i.e. its `ModuleInfo` is LARGER. Our 0.2.3-built struct missed the tail field(s); device `registerModule` read `onKeybind` out of bounds and cloned garbage → the `LDR x9,[x9,#0x10]` fault at `+1484` (verified by hand-decoding `/tmp/libpreloader.so` from the 1.5.27 APK). Earlier "headers identical" claim was wrong (diffed main against itself). Fix: build against `5d108da` + set all three callbacks (BedrockTools parity). Run `38212990180` green; `riru-v1.0.4` published.
