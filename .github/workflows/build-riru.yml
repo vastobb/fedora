@@ -24,13 +24,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android NDK (match Levi: 28.x, c++_shared)
+      - name: "Setup Android NDK r28 (c++_shared)"
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
           ndk-version: r28
 
-      - name: Configure (arm64-v8a, c++_shared - REQUIRED, see crash fix)
+      - name: "Configure arm64-v8a c++_shared"
         run: |
           set -eux
           export ANDROID_NDK_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
