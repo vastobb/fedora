@@ -16,7 +16,7 @@ if(PRELOADER_ANDROID_ROOT STREQUAL "" OR NOT EXISTS "${PRELOADER_ANDROID_ROOT}/i
   FetchContent_Declare(
     preloader_android
     GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git
-    GIT_TAG 0.2.3)
+    GIT_TAG 5d108da350ce3e7f13f51415f81e65344ecd5d14)
   FetchContent_MakeAvailable(preloader_android)
 endif()
 
