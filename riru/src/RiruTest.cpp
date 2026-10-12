@@ -1,4 +1,4 @@
-// Riru Test v1.0.7 — vanilla main-menu button via HBUI patch (in-memory).
+// Riru Test v1.0.8 — vanilla main-menu button via HBUI patch (in-memory).
 //
 // Goal: a "Riru" button between Play and Settings IN the vanilla Minecraft
 // main menu (1.26.52), identical UI/texture, click = no-op (test only).
@@ -32,6 +32,8 @@
 #include <android/log.h>
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <jni.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #ifndef __NR_memfd_create
@@ -57,6 +59,150 @@ constexpr const char *kButtonName = "Riru Test Button";
 void logInfo(const char *msg) {
   __android_log_print(ANDROID_LOG_INFO, kLogTag, "%s", msg);
 }
+
+// ---- File reporter: no-logcat diagnostics ---------------------------
+// Writes RIRU_* lines to the app's EXTERNAL dir so they can be copied out
+// with any file manager (user has no logcat). Uses raw open/write/close
+// (never fopen: ours is hooked). All JNI guarded; silent on any failure.
+namespace report {
+
+std::string g_path;
+std::mutex g_mutex;
+
+void clearEx(JNIEnv *env) {
+  if (env && env->ExceptionCheck()) {
+    env->ExceptionClear();
+  }
+}
+
+// method: "getExternalMediaDirs" (->[File]) or "getExternalFilesDir" (->File)
+std::string appDir(JavaVM *vm, bool media) {
+  if (!vm) {
+    return "";
+  }
+  JNIEnv *env = nullptr;
+  bool attached = false;
+  if (vm->GetEnv((void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+    if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) {
+      return "";
+    }
+    attached = true;
+  }
+  std::string out;
+  do {
+    jclass at = env->FindClass("android/app/ActivityThread");
+    clearEx(env);
+    if (!at) {
+      break;
+    }
+    jmethodID cur = env->GetStaticMethodID(
+        at, "currentApplication", "()Landroid/app/Application;");
+    clearEx(env);
+    if (!cur) {
+      break;
+    }
+    jobject app = env->CallStaticObjectMethod(at, cur);
+    clearEx(env);
+    if (!app) {
+      break;
+    }
+    jclass ctx = env->FindClass("android/content/Context");
+    clearEx(env);
+    if (!ctx) {
+      break;
+    }
+    jobject dirObj = nullptr;
+    if (media) {
+      jmethodID m = env->GetMethodID(ctx, "getExternalMediaDirs",
+                                     "()[Ljava/io/File;");
+      clearEx(env);
+      if (!m) {
+        break;
+      }
+      jobjectArray arr =
+          (jobjectArray)env->CallObjectMethod(app, m);
+      clearEx(env);
+      if (!arr || env->GetArrayLength(arr) < 1) {
+        break;
+      }
+      dirObj = env->GetObjectArrayElement(arr, 0);
+      clearEx(env);
+    } else {
+      jmethodID m = env->GetMethodID(ctx, "getExternalFilesDir",
+                                     "(Ljava/lang/String;)Ljava/io/File;");
+      clearEx(env);
+      if (!m) {
+        break;
+      }
+      dirObj = env->CallObjectMethod(app, m, nullptr);
+      clearEx(env);
+    }
+    if (!dirObj) {
+      break;
+    }
+    jclass fileCl = env->FindClass("java/io/File");
+    clearEx(env);
+    if (!fileCl) {
+      break;
+    }
+    jmethodID gap = env->GetMethodID(fileCl, "getAbsolutePath",
+                                     "()Ljava/lang/String;");
+    clearEx(env);
+    if (!gap) {
+      break;
+    }
+    jstring js = (jstring)env->CallObjectMethod(dirObj, gap);
+    clearEx(env);
+    if (!js) {
+      break;
+    }
+    const char *c = env->GetStringUTFChars(js, nullptr);
+    if (c) {
+      out = c;
+      env->ReleaseStringUTFChars(js, c);
+    }
+  } while (false);
+  if (attached) {
+    vm->DetachCurrentThread();
+  }
+  return out;
+}
+
+void init(JavaVM *vm, const char *ver) {
+  std::string dir = appDir(vm, true);
+  if (dir.empty()) {
+    dir = appDir(vm, false);
+  }
+  if (dir.empty()) {
+    return;
+  }
+  g_path = dir + "/riru_report.txt";
+  const int fd =
+      open(g_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    g_path.clear();
+    return;
+  }
+  std::string head = std::string("RIRU report ") + ver + "\n";
+  write(fd, head.c_str(), head.size());
+  close(fd);
+}
+
+void log(const char *line) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_path.empty() || !line) {
+    return;
+  }
+  const int fd = open(g_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd < 0) {
+    return;
+  }
+  write(fd, line, std::strlen(line));
+  write(fd, "\n", 1);
+  close(fd);
+}
+
+} // namespace report
 
 // ---- Injected script: clone Play -> "Riru" between Play and Settings ----
 constexpr const char kRiruJs[] =
@@ -220,6 +366,12 @@ void ensureReady(AAsset *asset, Tracked &t) {
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
                         "RIRU_HBUI patched %zu -> %zu bytes", orig.size(),
                         t.bytes.size());
+    {
+      char b[128];
+      std::snprintf(b, sizeof(b), "RIRU patched aasset %zu -> %zu",
+                    orig.size(), t.bytes.size());
+      report::log(b);
+    }
   } else {
     t.bytes = std::move(orig);
   }
@@ -268,13 +420,16 @@ FILE *fopenDetour(const char *path, const char *mode) {
   }
   // Target disk file: read original, patch, serve substitute. Any failure
   // falls back to the plain original open (menu intact, button absent).
-  FILE *orig = g_fopenOrig ? g_fopenOrig(path, mode) : nullptr;
+  FOpenFn ro = g_fopenOrig;
+  FCloseFn rc = g_fcloseOrig;
+  FILE *orig = ro ? ro(path, mode) : nullptr;
   if (!orig) {
     return nullptr;
   }
   std::vector<unsigned char> fileBytes;
   {
-    // read orig fully then close it (no hook interference: direct calls)
+    // read orig fully then close it via SAVED originals (never ::fclose:
+    // that would re-enter this hook chain)
     unsigned char tmp[65536];
     size_t n = 0;
     bool ok = true;
@@ -288,18 +443,21 @@ FILE *fopenDetour(const char *path, const char *mode) {
         break;
       }
     }
-    std::fclose(orig);
+    if (rc) {
+      rc(orig);
+    }
+    orig = nullptr;
     if (!ok || fileBytes.empty() ||
         !looksHtml(fileBytes.data(), fileBytes.size())) {
       // not patchable: reopen original path and return it untouched
-      return g_fopenOrig ? g_fopenOrig(path, mode) : nullptr;
+      return ro ? ro(path, mode) : nullptr;
     }
   }
   std::vector<unsigned char> patched =
       buildPatched(fileBytes.data(), fileBytes.size());
   FILE *sub = serveMemFile(patched);
   if (!sub) {
-    return g_fopenOrig ? g_fopenOrig(path, mode) : nullptr;
+    return ro ? ro(path, mode) : nullptr;
   }
   long hit = 0;
   {
@@ -311,6 +469,12 @@ FILE *fopenDetour(const char *path, const char *mode) {
   __android_log_print(ANDROID_LOG_INFO, kLogTag,
                       "RIRU_HBUI fopen #%ld path=%s %zu -> %zu bytes", hit, path,
                       fileBytes.size(), patched.size());
+  {
+    char b[512];
+    std::snprintf(b, sizeof(b), "RIRU patched fopen %s %zu -> %zu",
+                  path, fileBytes.size(), patched.size());
+    report::log(b);
+  }
   return sub;
 }
 
@@ -320,9 +484,10 @@ int fcloseDetour(FILE *f) {
     auto it = g_memFiles.find(f);
     if (it != g_memFiles.end()) {
       g_memFiles.erase(it);
-      __android_log_print(ANDROID_LOG_INFO, kLogTag,
-                          "RIRU_HBUI fclose sub=%p", (const void *)f);
-      return std::fclose(f); // closes owned memfd as well
+      report("fclose sub");
+      lock.unlock();
+      // SAVED original: ::fclose would re-enter this detour forever
+      return g_fcloseOrig ? g_fcloseOrig(f) : EOF;
     }
   }
   return g_fcloseOrig ? g_fcloseOrig(f) : EOF;
@@ -340,6 +505,13 @@ AAsset *openDetour(AAssetManager *mgr, const char *filename, int mode) {
                         "RIRU_HBUI open #%ld name=%s asset=%p",
                         g_hbuiOpens, filename ? filename : "(null)",
                         (const void *)asset);
+    {
+      char b[320];
+      std::snprintf(b, sizeof(b), "RIRU open aasset #%ld %s asset=%p",
+                    g_hbuiOpens, filename ? filename : "(null)",
+                    (const void *)asset);
+      report::log(b);
+    }
   } else if (filename && std::strstr(filename, "hbui") != nullptr) {
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
                         "RIRU_HBUI see name=%s asset=%p", filename,
@@ -556,6 +728,11 @@ int install() {
           g_closeHook);
   __android_log_print(ANDROID_LOG_INFO, kLogTag,
                       "RIRU_HBUI hooks installed %d/9", n);
+  {
+    char b[96];
+    std::snprintf(b, sizeof(b), "RIRU hooks %d/9", n);
+    report::log(b);
+  }
   return n;
 }
 
@@ -596,17 +773,24 @@ public:
     auto &self = getSelf();
     std::error_code ec;
     std::filesystem::create_directories(self.getConfigDir(), ec);
-    self.getLogger().info("Riru Test load v1.0.7: id={} name={}", self.getId(),
+    self.getLogger().info("Riru Test load v1.0.8: id={} name={}", self.getId(),
                           self.getName());
-    logInfo("Riru load v1.0.7");
+    logInfo("Riru load v1.0.8");
+    report::init(self.getJavaVM(), "v1.0.8");
+    report::log("RIRU load: report ready");
     const int hooks = hbui::install();
-    self.getLogger().info("Riru HBUI hooks: {}/6", hooks);
+    self.getLogger().info("Riru HBUI hooks: {}/9", hooks);
+    {
+      char b[96];
+      std::snprintf(b, sizeof(b), "RIRU hooks installed %d/9", hooks);
+      report::log(b);
+    }
     return true;
   }
 
   bool enable() {
     auto &self = getSelf();
-    logInfo("Riru enable v1.0.7 step1: register module + callbacks");
+    logInfo("Riru enable v1.0.8 step1: register module + callbacks");
     const bool moduleOk =
         pl::modmenu::ModuleBuilder(kModuleId, kModuleName)
             .defaultEnabled(true)
@@ -614,37 +798,37 @@ public:
             .onConfigChanged([](std::string_view, std::string_view, std::string_view) {})
             .onKeybind([](std::string_view, std::string_view, bool) {})
             .registerModule();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.7 step1 module=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.8 step1 module=%d",
                         (int)moduleOk);
     if (!moduleOk) {
-      self.getLogger().error("Riru v1.0.7: module register failed");
+      self.getLogger().error("Riru v1.0.8: module register failed");
       return false;
     }
 
-    logInfo("Riru enable v1.0.7 step2: register button + event");
+    logInfo("Riru enable v1.0.8 step2: register button + event");
     const bool buttonOk =
         pl::modmenu::ButtonBuilder(kButtonId, kButtonName)
             .moduleId(kModuleId)
             .label("Riru")
             .onEvent([](std::string_view, pl::modmenu::ButtonEvent, float) {})
             .registerButton();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.7 step2 button=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.8 step2 button=%d",
                         (int)buttonOk);
     if (!buttonOk) {
-      self.getLogger().error("Riru v1.0.7: button register failed");
+      self.getLogger().error("Riru v1.0.8: button register failed");
       pl::modmenu::unregisterModule(kModuleId);
       return false;
     }
 
-    self.getLogger().info("Riru Test enable v1.0.7 OK");
-    logInfo("Riru enable v1.0.7 OK");
+    self.getLogger().info("Riru Test enable v1.0.8 OK");
+    logInfo("Riru enable v1.0.8 OK");
     return true;
   }
 
   bool disable() {
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
-    logInfo("Riru disable v1.0.7");
+    logInfo("Riru disable v1.0.8");
     return true;
   }
 
@@ -652,7 +836,7 @@ public:
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
     hbui::reset();
-    logInfo("Riru unload v1.0.7");
+    logInfo("Riru unload v1.0.8");
     return true;
   }
 
