@@ -1,4 +1,4 @@
-// Riru Test v1.0.9 — vanilla main-menu button via HBUI patch (in-memory).
+// Riru Test v1.0.10 — vanilla main-menu button via HBUI patch (in-memory).
 //
 // Goal: a "Riru" button between Play and Settings IN the vanilla Minecraft
 // main menu (1.26.52), identical UI/texture, click = no-op (test only).
@@ -34,6 +34,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <jni.h>
+#include <sys/types.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #ifndef __NR_memfd_create
@@ -257,8 +258,16 @@ using LengthFn = off_t (*)(AAsset *);
 using BufferFn = const void *(*)(AAsset *, off_t *);
 using OpenFdFn = int (*)(AAsset *, off_t *, off_t *);
 using CloseFn = void (*)(AAsset *);
+using OpenDirFn = AAssetDir *(*)(AAssetManager *, const char *);
+using NextFn = const char *(*)(AAssetDir *);
+using DirCloseFn = void (*)(AAssetDir *);
+using Seek64Fn = off64_t (*)(AAsset *, off64_t, int);
 
 OpenFn g_openOrig = nullptr;
+OpenDirFn g_openDirOrig = nullptr;
+NextFn g_nextOrig = nullptr;
+DirCloseFn g_dirCloseOrig = nullptr;
+Seek64Fn g_seek64Orig = nullptr;
 ReadFn g_readOrig = nullptr;
 LengthFn g_lengthOrig = nullptr;
 BufferFn g_bufferOrig = nullptr;
@@ -272,6 +281,10 @@ FCloseFn g_fcloseOrig = nullptr;
 pl::memory::HookHandle g_fopenHook;
 pl::memory::HookHandle g_fopen64Hook;
 pl::memory::HookHandle g_fcloseHook;
+pl::memory::HookHandle g_openDirHook;
+pl::memory::HookHandle g_nextHook;
+pl::memory::HookHandle g_dirCloseHook;
+pl::memory::HookHandle g_seek64Hook;
 pl::memory::HookHandle g_openHook;
 pl::memory::HookHandle g_readHook;
 pl::memory::HookHandle g_lengthHook;
@@ -293,6 +306,8 @@ struct Tracked {
 std::mutex g_mutex;
 std::unordered_map<AAsset *, Tracked> g_files;
 std::unordered_map<FILE *, int> g_memFiles; // our substituted FILE* -> memfd (fclose closes)
+std::unordered_map<AAssetDir *, std::string> g_dirs;
+long g_nextLogged = 0;
 long g_hbuiOpens = 0;
 long g_fopenHits = 0;
 
@@ -303,9 +318,14 @@ Kind classify(const char *name) {
     return Kind::None;
   }
   const bool hb = std::strstr(name, "hbui") != nullptr;
-  if (hb && std::strstr(name, "index.html") != nullptr) {
+  if (std::strstr(name, "index.html") != nullptr) {
+    // Broadened v1.0.10: accept bare "index.html" too (dir enumeration can
+    // yield names whose full form we never see statically). Content gate
+    // (looksHtml) + Play/Settings-sibling check in JS keep this safe:
+    // non-menu pages get an inert script.
     return Kind::Html;
   }
+  (void)hb;
   // Hashed HBUI bundle (e.g. index-<HASH>.js): appending our payload runs it
   // as part of an already-allowed script (no inline-CSP dependence).
   size_t n = std::strlen(name);
@@ -541,6 +561,76 @@ int fcloseDetour(FILE *f) {
   return g_fcloseOrig ? g_fcloseOrig(f) : EOF;
 }
 
+AAssetDir *openDirDetour(AAssetManager *mgr, const char *dirName) {
+  AAssetDir *dir =
+      g_openDirOrig ? g_openDirOrig(mgr, dirName) : nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (dir && dirName) {
+      g_dirs.emplace(dir, dirName);
+    }
+  }
+  __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                      "RIRU_HBUI openDir name=%s dir=%p",
+                      dirName ? dirName : "(null)", (const void *)dir);
+  {
+    char b[320];
+    std::snprintf(b, sizeof(b), "RIRU opendir %s dir=%p",
+                  dirName ? dirName : "(null)", (const void *)dir);
+    report::log(b);
+  }
+  return dir;
+}
+
+const char *nextDetour(AAssetDir *dir) {
+  const char *name = g_nextOrig ? g_nextOrig(dir) : nullptr;
+  if (name) {
+    std::string dirName;
+    {
+      std::lock_guard<std::mutex> lock(g_mutex);
+      auto it = g_dirs.find(dir);
+      if (it != g_dirs.end()) {
+        dirName = it->second;
+      }
+    }
+    const bool interesting =
+        std::strstr(name, "hbui") != nullptr ||
+        std::strstr(name, ".html") != nullptr ||
+        std::strstr(name, ".js") != nullptr ||
+        std::strstr(name, "routes") != nullptr ||
+        std::strstr(name, "gui") != nullptr;
+    if (interesting && g_nextLogged < 60) {
+      ++g_nextLogged;
+      __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                          "RIRU_HBUI enum dir=%s file=%s",
+                          dirName.c_str(), name);
+      char b[512];
+      std::snprintf(b, sizeof(b), "RIRU enum %s/%s",
+                    dirName.c_str(), name);
+      report::log(b);
+    }
+  }
+  return name;
+}
+
+void dirCloseDetour(AAssetDir *dir) {
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_dirs.erase(dir);
+  }
+  // Note: libandroid has no public AAssetDir_close in old NDKs; call saved orig.
+  if (g_dirCloseOrig) {
+    g_dirCloseOrig(dir);
+  }
+}
+
+off64_t seek64Detour(AAsset *asset, off64_t off, int whence) {
+  if (g_seek64Orig) {
+    return g_seek64Orig(asset, off, whence);
+  }
+  return (off64_t)-1;
+}
+
 AAsset *openDetour(AAssetManager *mgr, const char *filename, int mode) {
   AAsset *asset = g_openOrig ? g_openOrig(mgr, filename, mode) : nullptr;
   if (isTarget(filename)) {
@@ -764,6 +854,14 @@ int install() {
       }
     }
   }
+  tryHook("AAssetManager_openDir", (void *)openDirDetour,
+          (void **)&g_openDirOrig, g_openDirHook);
+  tryHook("AAssetDir_getNextFileName", (void *)nextDetour,
+          (void **)&g_nextOrig, g_nextHook);
+  tryHook("AAssetDir_close", (void *)dirCloseDetour,
+          (void **)&g_dirCloseOrig, g_dirCloseHook);
+  tryHook("AAsset_seek64", (void *)seek64Detour,
+          (void **)&g_seek64Orig, g_seek64Hook);
   tryHook("AAssetManager_open", (void *)openDetour,
           (void **)&g_openOrig, g_openHook);
   tryHook("AAsset_read", (void *)readDetour, (void **)&g_readOrig,
@@ -780,13 +878,17 @@ int install() {
                       "RIRU_HBUI hooks installed %d/9", n);
   {
     char b[96];
-    std::snprintf(b, sizeof(b), "RIRU hooks %d/9", n);
+    std::snprintf(b, sizeof(b), "RIRU hooks %d/13", n);
     report::log(b);
   }
   return n;
 }
 
 void reset() {
+  g_openDirHook.reset();
+  g_nextHook.reset();
+  g_dirCloseHook.reset();
+  g_seek64Hook.reset();
   g_fopenHook.reset();
   g_fopen64Hook.reset();
   g_fcloseHook.reset();
@@ -798,6 +900,7 @@ void reset() {
   g_closeHook.reset();
   std::lock_guard<std::mutex> lock(g_mutex);
   g_memFiles.clear();
+  g_dirs.clear();
   for (auto &kv : g_files) {
     if (kv.second.memFd >= 0) {
       close(kv.second.memFd);
@@ -823,16 +926,16 @@ public:
     auto &self = getSelf();
     std::error_code ec;
     std::filesystem::create_directories(self.getConfigDir(), ec);
-    self.getLogger().info("Riru Test load v1.0.9: id={} name={}", self.getId(),
+    self.getLogger().info("Riru Test load v1.0.10: id={} name={}", self.getId(),
                           self.getName());
-    logInfo("Riru load v1.0.9");
-    report::init(self.getJavaVM(), "v1.0.9");
+    logInfo("Riru load v1.0.10");
+    report::init(self.getJavaVM(), "v1.0.10");
     report::log("RIRU load: report ready");
     const int hooks = hbui::install();
-    self.getLogger().info("Riru HBUI hooks: {}/9", hooks);
+    self.getLogger().info("Riru HBUI hooks: {}/13", hooks);
     {
       char b[96];
-      std::snprintf(b, sizeof(b), "RIRU hooks installed %d/9", hooks);
+      std::snprintf(b, sizeof(b), "RIRU hooks installed %d/13", hooks);
       report::log(b);
     }
     return true;
@@ -840,7 +943,7 @@ public:
 
   bool enable() {
     auto &self = getSelf();
-    logInfo("Riru enable v1.0.9 step1: register module + callbacks");
+    logInfo("Riru enable v1.0.10 step1: register module + callbacks");
     const bool moduleOk =
         pl::modmenu::ModuleBuilder(kModuleId, kModuleName)
             .defaultEnabled(true)
@@ -848,37 +951,37 @@ public:
             .onConfigChanged([](std::string_view, std::string_view, std::string_view) {})
             .onKeybind([](std::string_view, std::string_view, bool) {})
             .registerModule();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.9 step1 module=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.10 step1 module=%d",
                         (int)moduleOk);
     if (!moduleOk) {
-      self.getLogger().error("Riru v1.0.9: module register failed");
+      self.getLogger().error("Riru v1.0.10: module register failed");
       return false;
     }
 
-    logInfo("Riru enable v1.0.9 step2: register button + event");
+    logInfo("Riru enable v1.0.10 step2: register button + event");
     const bool buttonOk =
         pl::modmenu::ButtonBuilder(kButtonId, kButtonName)
             .moduleId(kModuleId)
             .label("Riru")
             .onEvent([](std::string_view, pl::modmenu::ButtonEvent, float) {})
             .registerButton();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.9 step2 button=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.10 step2 button=%d",
                         (int)buttonOk);
     if (!buttonOk) {
-      self.getLogger().error("Riru v1.0.9: button register failed");
+      self.getLogger().error("Riru v1.0.10: button register failed");
       pl::modmenu::unregisterModule(kModuleId);
       return false;
     }
 
-    self.getLogger().info("Riru Test enable v1.0.9 OK");
-    logInfo("Riru enable v1.0.9 OK");
+    self.getLogger().info("Riru Test enable v1.0.10 OK");
+    logInfo("Riru enable v1.0.10 OK");
     return true;
   }
 
   bool disable() {
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
-    logInfo("Riru disable v1.0.9");
+    logInfo("Riru disable v1.0.10");
     return true;
   }
 
@@ -886,7 +989,7 @@ public:
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
     hbui::reset();
-    logInfo("Riru unload v1.0.9");
+    logInfo("Riru unload v1.0.10");
     return true;
   }
 
