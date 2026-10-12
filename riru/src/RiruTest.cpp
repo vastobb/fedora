@@ -1,4 +1,4 @@
-// Riru Test v1.0.8 — vanilla main-menu button via HBUI patch (in-memory).
+// Riru Test v1.0.9 — vanilla main-menu button via HBUI patch (in-memory).
 //
 // Goal: a "Riru" button between Play and Settings IN the vanilla Minecraft
 // main menu (1.26.52), identical UI/texture, click = no-op (test only).
@@ -279,13 +279,14 @@ pl::memory::HookHandle g_bufferHook;
 pl::memory::HookHandle g_openFdHook;
 pl::memory::HookHandle g_closeHook;
 
-constexpr off_t kMaxPatchBytes = 4 * 1024 * 1024;
+constexpr off_t kMaxPatchBytes = 32 * 1024 * 1024;
 
 struct Tracked {
   std::vector<unsigned char> bytes; // patched (or original if unpatchable)
   size_t off = 0;
   bool ready = false;
   bool patched = false;
+  bool js = false;
   int memFd = -1;
 };
 
@@ -295,12 +296,42 @@ std::unordered_map<FILE *, int> g_memFiles; // our substituted FILE* -> memfd (f
 long g_hbuiOpens = 0;
 long g_fopenHits = 0;
 
-bool isTarget(const char *name) {
+enum class Kind { None, Html, JsBundle };
+
+Kind classify(const char *name) {
   if (!name) {
+    return Kind::None;
+  }
+  const bool hb = std::strstr(name, "hbui") != nullptr;
+  if (hb && std::strstr(name, "index.html") != nullptr) {
+    return Kind::Html;
+  }
+  // Hashed HBUI bundle (e.g. index-<HASH>.js): appending our payload runs it
+  // as part of an already-allowed script (no inline-CSP dependence).
+  size_t n = std::strlen(name);
+  if (hb && n > 3 && name[n - 1] == 's' && name[n - 2] == 'j' &&
+      name[n - 3] == '.' && std::strstr(name, "map") == nullptr) {
+    return Kind::JsBundle;
+  }
+  return Kind::None;
+}
+
+bool isTarget(const char *name) {
+  return classify(name) != Kind::None;
+}
+
+bool looksJs(const unsigned char *dta, size_t n) {
+  if (!dta || n < 1024) {
     return false;
   }
-  return std::strstr(name, "hbui") != nullptr &&
-         std::strstr(name, "index.html") != nullptr;
+  const size_t scan = n < 65536 ? n : 65536;
+  static const char kNeedle[] = "function";
+  for (size_t i = 0; i + 8 < scan; ++i) {
+    if (std::memcmp(dta + i, kNeedle, 8) == 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool looksHtml(const unsigned char *d, size_t n) {
@@ -320,7 +351,15 @@ bool looksHtml(const unsigned char *d, size_t n) {
   return false;
 }
 
-std::vector<unsigned char> buildPatched(const unsigned char *orig, size_t len) {
+std::vector<unsigned char> buildPatched(const unsigned char *orig, size_t len,
+                                    bool js) {
+  if (js) {
+    // Append to the bundle itself: runs as allowed script content.
+    std::vector<unsigned char> out(orig, orig + len);
+    out.push_back(';');
+    out.insert(out.end(), kRiruJs, kRiruJs + sizeof(kRiruJs) - 1);
+    return out;
+  }
   std::string head((const char *)orig, len);
   const std::string tag =
       std::string("<script>") + kRiruJs + "</script>";
@@ -360,16 +399,19 @@ void ensureReady(AAsset *asset, Tracked &t) {
   if ((off_t)orig.size() != total) {
     return;
   }
-  if (looksHtml(orig.data(), orig.size())) {
-    t.bytes = buildPatched(orig.data(), orig.size());
+  const bool ok = t.js ? looksJs(orig.data(), orig.size())
+                     : looksHtml(orig.data(), orig.size());
+  if (ok) {
+    t.bytes = buildPatched(orig.data(), orig.size(), t.js);
     t.patched = true;
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
-                        "RIRU_HBUI patched %zu -> %zu bytes", orig.size(),
+                        "RIRU_HBUI patched %s %zu -> %zu bytes",
+                        t.js ? "jsbundle" : "html", orig.size(),
                         t.bytes.size());
     {
       char b[128];
-      std::snprintf(b, sizeof(b), "RIRU patched aasset %zu -> %zu",
-                    orig.size(), t.bytes.size());
+      std::snprintf(b, sizeof(b), "RIRU patched aasset-%s %zu -> %zu",
+                    t.js ? "js" : "html", orig.size(), t.bytes.size());
       report::log(b);
     }
   } else {
@@ -447,14 +489,19 @@ FILE *fopenDetour(const char *path, const char *mode) {
       rc(orig);
     }
     orig = nullptr;
-    if (!ok || fileBytes.empty() ||
-        !looksHtml(fileBytes.data(), fileBytes.size())) {
+    if (!ok || fileBytes.empty()) {
       // not patchable: reopen original path and return it untouched
       return ro ? ro(path, mode) : nullptr;
     }
   }
+  const bool js = (classify(path) == Kind::JsBundle);
+  const bool okc = js ? looksJs(fileBytes.data(), fileBytes.size())
+                      : looksHtml(fileBytes.data(), fileBytes.size());
+  if (!okc) {
+    return ro ? ro(path, mode) : nullptr;
+  }
   std::vector<unsigned char> patched =
-      buildPatched(fileBytes.data(), fileBytes.size());
+      buildPatched(fileBytes.data(), fileBytes.size(), js);
   FILE *sub = serveMemFile(patched);
   if (!sub) {
     return ro ? ro(path, mode) : nullptr;
@@ -471,8 +518,9 @@ FILE *fopenDetour(const char *path, const char *mode) {
                       fileBytes.size(), patched.size());
   {
     char b[512];
-    std::snprintf(b, sizeof(b), "RIRU patched fopen %s %zu -> %zu",
-                  path, fileBytes.size(), patched.size());
+    std::snprintf(b, sizeof(b), "RIRU patched fopen-%s %s %zu -> %zu",
+                  js ? "js" : "html", path, fileBytes.size(),
+                  patched.size());
     report::log(b);
   }
   return sub;
@@ -499,7 +547,9 @@ AAsset *openDetour(AAssetManager *mgr, const char *filename, int mode) {
     std::lock_guard<std::mutex> lock(g_mutex);
     ++g_hbuiOpens;
     if (asset) {
-      g_files.emplace(asset, Tracked{});
+      Tracked t;
+      t.js = (classify(filename) == Kind::JsBundle);
+      g_files.emplace(asset, std::move(t));
     }
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
                         "RIRU_HBUI open #%ld name=%s asset=%p",
@@ -773,10 +823,10 @@ public:
     auto &self = getSelf();
     std::error_code ec;
     std::filesystem::create_directories(self.getConfigDir(), ec);
-    self.getLogger().info("Riru Test load v1.0.8: id={} name={}", self.getId(),
+    self.getLogger().info("Riru Test load v1.0.9: id={} name={}", self.getId(),
                           self.getName());
-    logInfo("Riru load v1.0.8");
-    report::init(self.getJavaVM(), "v1.0.8");
+    logInfo("Riru load v1.0.9");
+    report::init(self.getJavaVM(), "v1.0.9");
     report::log("RIRU load: report ready");
     const int hooks = hbui::install();
     self.getLogger().info("Riru HBUI hooks: {}/9", hooks);
@@ -790,7 +840,7 @@ public:
 
   bool enable() {
     auto &self = getSelf();
-    logInfo("Riru enable v1.0.8 step1: register module + callbacks");
+    logInfo("Riru enable v1.0.9 step1: register module + callbacks");
     const bool moduleOk =
         pl::modmenu::ModuleBuilder(kModuleId, kModuleName)
             .defaultEnabled(true)
@@ -798,37 +848,37 @@ public:
             .onConfigChanged([](std::string_view, std::string_view, std::string_view) {})
             .onKeybind([](std::string_view, std::string_view, bool) {})
             .registerModule();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.8 step1 module=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.9 step1 module=%d",
                         (int)moduleOk);
     if (!moduleOk) {
-      self.getLogger().error("Riru v1.0.8: module register failed");
+      self.getLogger().error("Riru v1.0.9: module register failed");
       return false;
     }
 
-    logInfo("Riru enable v1.0.8 step2: register button + event");
+    logInfo("Riru enable v1.0.9 step2: register button + event");
     const bool buttonOk =
         pl::modmenu::ButtonBuilder(kButtonId, kButtonName)
             .moduleId(kModuleId)
             .label("Riru")
             .onEvent([](std::string_view, pl::modmenu::ButtonEvent, float) {})
             .registerButton();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.8 step2 button=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.9 step2 button=%d",
                         (int)buttonOk);
     if (!buttonOk) {
-      self.getLogger().error("Riru v1.0.8: button register failed");
+      self.getLogger().error("Riru v1.0.9: button register failed");
       pl::modmenu::unregisterModule(kModuleId);
       return false;
     }
 
-    self.getLogger().info("Riru Test enable v1.0.8 OK");
-    logInfo("Riru enable v1.0.8 OK");
+    self.getLogger().info("Riru Test enable v1.0.9 OK");
+    logInfo("Riru enable v1.0.9 OK");
     return true;
   }
 
   bool disable() {
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
-    logInfo("Riru disable v1.0.8");
+    logInfo("Riru disable v1.0.9");
     return true;
   }
 
@@ -836,7 +886,7 @@ public:
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
     hbui::reset();
-    logInfo("Riru unload v1.0.8");
+    logInfo("Riru unload v1.0.9");
     return true;
   }
 
