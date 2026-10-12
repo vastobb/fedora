@@ -26,7 +26,11 @@ User requirement: a `Riru` test button **inside Minecraft's own main menu**, vis
 
 ## Status
 
-- [x] Crash root-caused (STL) and fixed in build (v1.0.1).
-- [ ] HBUI main-menu file acquired from 1.26.52 APK.
+- [x] Crash root-caused (STL) and fixed in build (v1.0.1, retained in v1.0.2).
+- [x] Hooking mechanism mapped end-to-end (loader + GlossHook + BedrockTools patterns) — see `docs/HOOKING.md`.
+- [x] 7/8 BedrockTools signatures re-tested MATCH on 1.26.52 (`NormalTick`, `VersionString`, `ScreenViewRender`, `DrawText`, `ContainerOpen`, `ChatOpen`, `GetFov`); `ClientInstanceUpdate` needs Ghidra re-find.
+- [x] riru v1.0.2 probes the 7 on-device and logs `RIRU_SIG` lines, installs zero hooks (test-before-use).
+- [ ] User runs v1.0.2, returns `adb logcat -s RiruTest | grep RIRU_SIG` (confirms device addresses).
+- [ ] HBUI main-menu file acquired from 1.26.52 APK (`hbui/index.html` JS hash + start-screen route).
 - [ ] Override-vs-hook decision with evidence.
 - [ ] `riru` shows Bedrock-level button between Play and Settings, no-op, no crash (user-confirmed via screenshot).
