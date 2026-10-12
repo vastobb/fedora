@@ -1,4 +1,4 @@
-// Riru Test v1.0.3 — crash bisection build.
+// Riru Test v1.0.4 — bisection result applied.
 //
 // v1.0.0/v1.0.1 crashed deterministically in
 //   pl::modmenu::registerModule (SIGSEGV fault 0x10, tombstones 2026-10-12,
@@ -49,33 +49,42 @@ public:
     auto &self = getSelf();
     std::error_code ec;
     std::filesystem::create_directories(self.getConfigDir(), ec);
-    self.getLogger().info("Riru Test load v1.0.3: id={} name={}", self.getId(),
+    self.getLogger().info("Riru Test load v1.0.4: id={} name={}", self.getId(),
                           self.getName());
-    logInfo("Riru load v1.0.3");
+    logInfo("Riru load v1.0.4");
     return true;
   }
 
   bool enable() {
     auto &self = getSelf();
-    logInfo("Riru enable v1.0.3 step1: register minimal module");
+    logInfo("Riru enable v1.0.4 step1: register module + callbacks");
+    // v1.0.4: all three callbacks set to no-ops. Device libpreloader.so
+    // registerModule unconditionally clones the std::functions (faulting
+    // LDR x9,[x9,#0x10] at +1484 when the manager ptr is null = empty).
+    // BedrockTools always sets all three and never crashes; v1.0.0-v1.0.3
+    // left onConfigChanged/onKeybind (and in v1.0.3 onToggle too) empty.
     const bool moduleOk =
         pl::modmenu::ModuleBuilder(kModuleId, kModuleName)
             .defaultEnabled(true)
+            .onToggle([](std::string_view, bool) {})
+            .onConfigChanged([](std::string_view, std::string_view, std::string_view) {})
+            .onKeybind([](std::string_view, std::string_view, bool) {})
             .registerModule();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru step1 module=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.4 step1 module=%d",
                         (int)moduleOk);
     if (!moduleOk) {
       self.getLogger().error("Riru v1.0.3: minimal module register failed");
       return false;
     }
 
-    logInfo("Riru enable v1.0.3 step2: register minimal button");
+    logInfo("Riru enable v1.0.4 step2: register button + event");
     const bool buttonOk =
         pl::modmenu::ButtonBuilder(kButtonId, kButtonName)
             .moduleId(kModuleId)
             .label("Riru")
+            .onEvent([](std::string_view, pl::modmenu::ButtonEvent, float) {})
             .registerButton();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru step2 button=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.4 step2 button=%d",
                         (int)buttonOk);
     if (!buttonOk) {
       self.getLogger().error("Riru v1.0.3: minimal button register failed");
@@ -83,22 +92,22 @@ public:
       return false;
     }
 
-    self.getLogger().info("Riru Test enable v1.0.3 OK");
-    logInfo("Riru enable v1.0.3 OK");
+    self.getLogger().info("Riru Test enable v1.0.4 OK");
+    logInfo("Riru enable v1.0.4 OK");
     return true;
   }
 
   bool disable() {
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
-    logInfo("Riru disable v1.0.3");
+    logInfo("Riru disable v1.0.4");
     return true;
   }
 
   bool unload() {
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
-    logInfo("Riru unload v1.0.3");
+    logInfo("Riru unload v1.0.4");
     return true;
   }
 
