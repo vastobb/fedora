@@ -27,6 +27,17 @@ if __name__ == "__main__":
         print("WARN: PLGetModRegistration string not found (link may still export it); checking via llvm-nm if present...")
     else:
         print("export marker PLGetModRegistration found")
+    # Crash fix v1.0.1: libRiru.so MUST use shared libc++ (DT_NEEDED libc++_shared.so).
+    # Static libc++ (no DT_NEEDED) mismatches libpreloader.so's shared libc++ ABI
+    # for std::string/std::function across the .so boundary -> SIGSEGV in
+    # registerModule (fault 0x10, xCrash 2026-10-12). Fail the build if missing.
+    with open(so, 'rb') as f:
+        blob = f.read()
+    if b'libc++_shared.so' not in blob:
+        print("FAIL: libc++_shared.so not referenced — built with c++_static, will crash in registerModule.")
+        print("Rebuild with -DANDROID_STL=c++_shared (see build-riru.yml).")
+        sys.exit(1)
+    print("STL: libc++_shared OK (crash fix v1.0.1)")
     man = json.load(open("riru/manifest.json"))
     assert man.get("type") == "preload-native", "manifest type must be preload-native"
     entry = man.get("entry")

@@ -24,22 +24,29 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android NDK r27
+      - name: Setup Android NDK (match Levi: 28.x, c++_shared)
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r27
+          ndk-version: r28
 
-      - name: Configure (arm64-v8a)
+      - name: Configure (arm64-v8a, c++_shared — REQUIRED, see crash fix)
         run: |
           set -eux
           export ANDROID_NDK_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
+          # LeviLead: app/build.gradle mandates -DANDROID_STL=c++_shared.
+          # Default (c++_static) statically links libc++ into libRiru.so, so
+          # std::string/std::function passed to libpreloader.so (shared libc++)
+          # have mismatched ABIs -> SIGSEGV in registerModule (fault 0x10).
+          # v1.0.0 crashed exactly this way (xCrash SIGSEGV +1484); v1.0.1 fixes it.
           cmake -S riru -B build/riru \
             -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_shared \
             -DRIRU_USE_HOOKS=OFF
+          grep -r "ANDROID_STL" build/riru/CMakeCache.txt | head
 
       - name: Build
         run: cmake --build build/riru --verbose
