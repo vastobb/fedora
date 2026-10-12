@@ -1,4 +1,4 @@
-// Riru Test v1.0.13 — vanilla main-menu button via HBUI patch (in-memory).
+// Riru Test v1.0.14 — vanilla main-menu button via HBUI patch (in-memory).
 //
 // Goal: a "Riru" button between Play and Settings IN the vanilla Minecraft
 // main menu (1.26.52), identical UI/texture, click = no-op (test only).
@@ -319,14 +319,23 @@ std::unordered_map<AAssetDir *, std::string> g_dirs;
 long g_nextLogged = 0;
 long g_hbuiOpens = 0;
 long g_fopenHits = 0;
-long g_logA = 0;
-long g_logF = 0;
-long g_log2 = 0;
+// Dedup logging: first sight of each unique path (bounded set). Boot scans
+// the same subdirs hundreds of times; unique paths stay in the hundreds.
+std::unordered_set<std::string> g_seenA;
+std::unordered_set<std::string> g_seenF;
+std::unordered_set<std::string> g_seen2;
+constexpr size_t kSeenCap = 3000;
 
-void logFirst(const char *tag, const char *name) {
+void logFirst(const char *tag, const char *name,
+                std::unordered_set<std::string> &seen) {
+  if (!name || seen.size() >= kSeenCap) {
+    return;
+  }
+  if (!seen.insert(name).second) {
+    return; // already logged
+  }
   char b[256];
-  std::snprintf(b, sizeof(b), "RIRU %s %.180s", tag,
-                name ? name : "(null)");
+  std::snprintf(b, sizeof(b), "RIRU %s %.180s", tag, name);
   report::log(b);
 }
 
@@ -338,7 +347,7 @@ Kind classify(const char *name) {
   }
   const bool hb = std::strstr(name, "hbui") != nullptr;
   if (std::strstr(name, "index.html") != nullptr) {
-    // Broadened v1.0.13: accept bare "index.html" too (dir enumeration can
+    // Broadened v1.0.14: accept bare "index.html" too (dir enumeration can
     // yield names whose full form we never see statically). Content gate
     // (looksHtml) + Play/Settings-sibling check in JS keep this safe:
     // non-menu pages get an inert script.
@@ -584,9 +593,8 @@ static mode_t takeMode(int flags, va_list *pap) {
 }
 
 int open2Detour(const char *path, int flags, ...) {
-  if (path && (flags & 3) == 0 && g_log2 < 500) {
-    ++g_log2;
-    logFirst("open2", path);
+  if (path && (flags & 3) == 0) {
+    logFirst("open2", path, g_seen2);
   }
   if (path && (flags & 3) == 0 /*O_RDONLY*/) {
     const int fd = openPatched(path);
@@ -646,10 +654,7 @@ int openAtDetour(int dirfd, const char *path, int flags, ...) {
 }
 
 FILE *fopenDetour(const char *path, const char *mode) {
-  if (g_logF < 500) {
-    ++g_logF;
-    logFirst("openF", path);
-  }
+  logFirst("openF", path ? path : "(null)", g_seenF);
   if (!isDiskTarget(path) || !mode || mode[0] == 'w' || mode[0] == 'a' ||
       std::strchr(mode, '+') != nullptr) {
     return g_fopenOrig ? g_fopenOrig(path, mode) : nullptr;
@@ -806,10 +811,7 @@ off64_t seek64Detour(AAsset *asset, off64_t off, int whence) {
 }
 
 AAsset *openDetour(AAssetManager *mgr, const char *filename, int mode) {
-  if (g_logA < 500) {
-    ++g_logA;
-    logFirst("openA", filename);
-  }
+  logFirst("openA", filename ? filename : "(null)", g_seenA);
   AAsset *asset = g_openOrig ? g_openOrig(mgr, filename, mode) : nullptr;
   if (isTarget(filename)) {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -1135,10 +1137,10 @@ public:
     auto &self = getSelf();
     std::error_code ec;
     std::filesystem::create_directories(self.getConfigDir(), ec);
-    self.getLogger().info("Riru Test load v1.0.13: id={} name={}", self.getId(),
+    self.getLogger().info("Riru Test load v1.0.14: id={} name={}", self.getId(),
                           self.getName());
-    logInfo("Riru load v1.0.13");
-    report::init(self.getJavaVM(), "v1.0.13");
+    logInfo("Riru load v1.0.14");
+    report::init(self.getJavaVM(), "v1.0.14");
     report::log("RIRU load: report ready");
     const int hooks = hbui::install();
     self.getLogger().info("Riru HBUI hooks: {}/16", hooks);
@@ -1152,7 +1154,7 @@ public:
 
   bool enable() {
     auto &self = getSelf();
-    logInfo("Riru enable v1.0.13 step1: register module + callbacks");
+    logInfo("Riru enable v1.0.14 step1: register module + callbacks");
     const bool moduleOk =
         pl::modmenu::ModuleBuilder(kModuleId, kModuleName)
             .defaultEnabled(true)
@@ -1160,37 +1162,37 @@ public:
             .onConfigChanged([](std::string_view, std::string_view, std::string_view) {})
             .onKeybind([](std::string_view, std::string_view, bool) {})
             .registerModule();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.13 step1 module=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.14 step1 module=%d",
                         (int)moduleOk);
     if (!moduleOk) {
-      self.getLogger().error("Riru v1.0.13: module register failed");
+      self.getLogger().error("Riru v1.0.14: module register failed");
       return false;
     }
 
-    logInfo("Riru enable v1.0.13 step2: register button + event");
+    logInfo("Riru enable v1.0.14 step2: register button + event");
     const bool buttonOk =
         pl::modmenu::ButtonBuilder(kButtonId, kButtonName)
             .moduleId(kModuleId)
             .label("Riru")
             .onEvent([](std::string_view, pl::modmenu::ButtonEvent, float) {})
             .registerButton();
-    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.13 step2 button=%d",
+    __android_log_print(ANDROID_LOG_INFO, kLogTag, "Riru v1.0.14 step2 button=%d",
                         (int)buttonOk);
     if (!buttonOk) {
-      self.getLogger().error("Riru v1.0.13: button register failed");
+      self.getLogger().error("Riru v1.0.14: button register failed");
       pl::modmenu::unregisterModule(kModuleId);
       return false;
     }
 
-    self.getLogger().info("Riru Test enable v1.0.13 OK");
-    logInfo("Riru enable v1.0.13 OK");
+    self.getLogger().info("Riru Test enable v1.0.14 OK");
+    logInfo("Riru enable v1.0.14 OK");
     return true;
   }
 
   bool disable() {
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
-    logInfo("Riru disable v1.0.13");
+    logInfo("Riru disable v1.0.14");
     return true;
   }
 
@@ -1198,7 +1200,7 @@ public:
     pl::modmenu::unregisterButton(kButtonId);
     pl::modmenu::unregisterModule(kModuleId);
     hbui::reset();
-    logInfo("Riru unload v1.0.13");
+    logInfo("Riru unload v1.0.14");
     return true;
   }
 
