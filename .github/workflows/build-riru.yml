@@ -56,7 +56,7 @@ jobs:
           set -eux
           python3 tools/package_riru.py --so build/riru/out/arm64-v8a/libRiru.so --out dist/
           ls -lh dist/
-          tar -tf dist/riru.levipack
+          unzip -l dist/riru.levipack
 
       - name: Upload riru artifact
         uses: actions/upload-artifact@v4
