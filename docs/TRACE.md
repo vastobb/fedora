@@ -85,9 +85,13 @@ Render path candidates (BedrockTools patterns re-tested MATCH on this lib):
 
 All 4 open callers build filenames dynamically on-stack (no literals);
 nearby constants are unrelated (crash keys, tick settings, client IDs).
-`getNextFileName` callers enumerate APK asset dirs at runtime. Full C++
-decompilation of the 4 open callers + `MainMenuScreenController` is running
-in Ghidra (`/ghidra/riru_trace.py`); results land in `/ghidra/out/`.
+`getNextFileName` callers enumerate APK asset dirs at runtime. Full C++ decompilation of the 4 open callers is running in Ghidra
+(`/ghidra/riru_trace.py`); results land in `/ghidra/out/`.
+- `.rela.dyn` proof: `AAssetManager_openDir` (5x) + `AAsset_seek64` (18x)
+  use `R_AARCH64_ABS64` (type 257) = address-taken, called INDIRECTLY
+  (vtable/interface). So dir enumeration is real; v1.0.10 hooks it.
+- `fopen`/`open`/`LoadURL`-direct: NOT imported anywhere (exact-name
+  search). File IO = AAsset family + raw SVC syscalls only.
 
 ## 6. v1.0.6 coverage matrix
 
