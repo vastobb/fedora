@@ -30,7 +30,7 @@ jobs:
         with:
           ndk-version: r28
 
-      - name: Configure (arm64-v8a, c++_shared — REQUIRED, see crash fix)
+      - name: Configure (arm64-v8a, c++_shared - REQUIRED, see crash fix)
         run: |
           set -eux
           export ANDROID_NDK_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
