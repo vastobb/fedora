@@ -2,7 +2,7 @@
   "type": "preload-native",
   "name": "Riru Test",
   "author": "fedora",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "entry": "libRiru.so",
   "minecraft_versions": []
 }
