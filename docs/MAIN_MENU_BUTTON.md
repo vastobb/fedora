@@ -24,13 +24,18 @@ User requirement: a `Riru` test button **inside Minecraft's own main menu**, vis
 3. With the real HBUI file: craft override candidate (button element between Play and Settings, no-op handler), test via resource-pack bundle in `riru/resources/minecraft_resource_packs/riru_ui/`; if HBUI is not overridable, pivot to hook with a **tested** signature + `RIRU_USE_HOOKS=1` Actions build + on-device validation.
 4. Only mark done after user screenshot shows the Bedrock-level button in place with no crash.
 
+## v1.0.5 mechanism (no game offsets)
+
+`libminecraftpe.so` imports `AAssetManager_open/read/getLength/close` (verified in `.dynstr`: 2/1/2/1 hits) and references `/hbui/index.html`, `/hbui/gameplay.html`, `hbui/routes.json`. Those are STABLE `libandroid.so` NDK exports, resolved with `dlopen+dlsym` and hooked with `pl::memory::hook` — zero pattern scans, zero version fragility for the interception point. v1.0.5 only LOGS matching opens/reads. v1.0.6 will serve patched `/hbui/index.html` (original bytes + injected DOM-clone script: clone Play node, text "Riru", insert after Play) once the probe confirms the path on-device. Fallbacks if AAsset sees nothing: `AAsset_getBuffer` tracking, then `fopen/openat` hook, then CoHTML `LoadURL`.
+
 ## Status
 
 - [x] Crash root-caused (STL) and fixed in build (v1.0.1, retained in v1.0.2).
 - [x] Hooking mechanism mapped end-to-end (loader + GlossHook + BedrockTools patterns) — see `docs/HOOKING.md`.
 - [x] 7/8 BedrockTools signatures re-tested MATCH on 1.26.52 (`NormalTick`, `VersionString`, `ScreenViewRender`, `DrawText`, `ContainerOpen`, `ChatOpen`, `GetFov`); `ClientInstanceUpdate` needs Ghidra re-find.
 - [x] riru v1.0.2 probes the 7 on-device and logs `RIRU_SIG` lines, installs zero hooks (test-before-use).
-- [ ] User runs v1.0.2, returns `adb logcat -s RiruTest | grep RIRU_SIG` (confirms device addresses).
+- [x] v1.0.4 runs crash-free on device (user screenshots: vanilla menu + Levi Riru Test Enabled card).
+- [ ] User runs v1.0.5, returns `adb logcat -s RiruTest | grep RIRU_HBUI` (proves exact hbui asset path).
 - [ ] HBUI main-menu file acquired from 1.26.52 APK (`hbui/index.html` JS hash + start-screen route).
 - [ ] Override-vs-hook decision with evidence.
 - [ ] `riru` shows Bedrock-level button between Play and Settings, no-op, no crash (user-confirmed via screenshot).
