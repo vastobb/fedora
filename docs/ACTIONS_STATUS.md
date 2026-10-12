@@ -1,39 +1,41 @@
-# Actions status (2026-10-12)
+# Actions status (2026-10-12) — ALL GREEN
 
-Both workflows are **correctly defined** but cannot run right now.
+## Root cause of early failures (fixed)
 
-## Failure (not a YAML bug)
+1. **Private repo → billing block.** `vastobb/fedora` was `private:true`. Private runners hit `recent account payments have failed or spending limit needs to be increased`, 0 steps, no log (runs `38202873181`, `38202878248`, …). Fixed via `gh repo edit vastobb/fedora --visibility public --accept-visibility-change-consequences` → now `public`, free Actions minutes apply.
+2. **Wrong Ghidra asset date.** `reverse.yml` used `..._PUBLIC_20250226.zip` (9-byte 404). Correct for `11.3.1` is `..._PUBLIC_20250219.zip` (verified via `gh api repos/NationalSecurityAgency/ghidra/releases/tags/Ghidra_11.3.1_build`). Fixed + API fallback.
 
-`gh api .../check-runs/.../annotations` for latest runs:
+## Verified successful runs
 
-```text
-The job was not started because recent account payments have failed
-or your spending limit needs to be increased.
-Please check the 'Billing & plans' section in your settings
-```
+| Workflow | Run | Result |
+| -------- | --- | ------ |
+| Build riru (NDK) | `38204144574` | `success` in `1m11s`, all 8 steps green |
+| RE libminecraftpe (Ghidra) | `38204371810` | `success` in `51s` |
 
-- `Build riru (NDK)` runs `38202873181`, `38202465209`, `38202458362` → `failure`, 0 steps.
-- `RE: libminecraftpe (Ghidra)` run `38202878248` → `failure`, 0 steps.
-
-Runner never started; no log. Fix billing/spending limit, then re-dispatch (no code change needed).
-
-## Re-run when fixed
+Re-run:
 
 ```bash
-gh workflow run "Build riru (NDK, Actions-only)" --repo vastobb/fedora
+gh workflow run "Build riru (NDK, Actions-only)" --repo vastobb/fedora --ref main
 gh workflow run "RE: libminecraftpe (Ghidra, Actions-only)" --repo vastobb/fedora --ref main
 gh run list --repo vastobb/fedora --limit 5
-gh run view <id> --repo vastobb/fedora --log-failed | head -n 200
 ```
 
-## What is already validated without Actions
+## Build output (verified)
 
-- `riru/manifest.json` parses, `type: preload-native`, `entry: libRiru.so` exists in package plan.
-- `tools/elf_triage.py` + `tools/sig_scan.py` + `tools/validate_offsets.py` pass locally on `/emulated/libminecraftpe.so` (see `analysis/`).
-- `tools/package_riru.py` logic reviewed; full NDK compile + `PLGetModRegistration` export check runs in `build-riru.yml` once runners work.
-- `riru` default (`RIRU_USE_HOOKS=0`) needs **no game offsets** — ModMenu button path is the tested-safe route. Hook path stays gated until `reverse.yml` yields `verified` offsets.
+- `libRiru.so`: `736,840` B, ELF64 AArch64 (`e_machine 183`), `PLGetModRegistration x5`, `Riru Test x7`, `riru.test_button x1`.
+- `manifest.json`: `type preload-native`, `entry libRiru.so`.
+- `riru.levipack`: tar `riru/`, `riru/libRiru.so`, `riru/manifest.json`.
+- Published: Release `riru-v1.0.0` assets `riru.levipack` (`747,520` B) + `libRiru.so`. Import the `.levipack` into LeviLaunchroid.
+- Artifact: `riru-levipack` from run `38204144574`.
 
-## Workflow hardening done
+## Reverse output (verified, candidates only)
 
-- `runs-on: ubuntu-24.04` (pin, avoid `ubuntu-latest` → 26 migration notice).
-- NDK via `nttld/setup-ndk@v1` (`ndk-version: r27`) instead of only `android-actions/setup-android` package string.
+- `reverse-report` artifact from run `38204371810`: `out/reverse-report.md`, `out/offsets.json`, `triage.json`, `lib/sha256.txt`.
+- Lib SHA256 `5f5baf8e...720e757c4`, `328,419,680` B. `.rodata`: `OreUI x7798`, `ScreenController x3852`, `MainMenu x265`, `PlayScreen x226`, `StartScreen x15` (`registerPreStartScreen`), versions `1.21.80/110/90/120`.
+- All hook entries `status: candidate` — `validate_offsets.py` gates `verified`. `riru` stays `RIRU_USE_HOOKS=0` (ModMenu-only, no offsets needed).
+
+## Workflow hardening
+
+- `runs-on: ubuntu-24.04` (pin).
+- NDK via `nttld/setup-ndk@v1` (`r27`).
+- Ghidra resolve via fixed date + `gh api` fallback.
