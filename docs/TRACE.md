@@ -60,7 +60,36 @@ Render path candidates (BedrockTools patterns re-tested MATCH on this lib):
   symbols via `dlopen+dlsym` — zero game offsets. Injected script clones the
   Play DOM node (identical UI/texture by construction).
 
-## 4. v1.0.6 coverage matrix
+## 4. Local RE workstation (/ghidra, authorized 2026-10-12)
+
+- `/ghidra/libminecraftpe.so` (copy of `/emulated/`, SHA256 `5f5baf8e…`).
+- Tools (all local): Capstone 5.0.9 wheel (`/ghidra/tools/capstone_py`),
+  hand-rolled ELF/ADRP/PLT/xref scanners (`/tmp/opencode/re/*.py`), Ghidra
+  12.1.4 + system JDK 25 (`/usr/lib/jvm/java-openjdk`; Temurin 17/21 JREs
+  were rejected by Ghidra's launcher).
+- PLT lesson (AArch64 LLD): `rela[i]` ↔ stub at `plt+16*(i+2)` (NOT `i+1`:
+  proven by disassembling stubs and matching each stub's GOT load against
+  `r_offset`). Earlier xref tables built with the `i+1` rule were WRONG
+  (they pointed at a libyuv row function, not file IO).
+
+## 5. Verified import slots (stub-disassembly ↔ rela ↔ dynstr cross-checked)
+
+| Import | TRUE PLT slot | BL sites |
+| ------ | ------------- | -------- |
+| `AAssetManager_open` | `0x12912d80` | 4 |
+| `AAssetDir_getNextFileName` | `0x12912860` | 13 |
+| `AAsset_read` | `0x12913c60` | 0 (reads go through wrappers/virtuals) |
+| `AAsset_close` / `getLength` / `getLength64` | resolved | — |
+| `fopen`/`open`/`openat`/`LoadURL`(direct) | NOT imported | — (CoHTML calls are virtual = BLR) |
+| `AAssetManager_openDir`/`getBuffer`/`openFileDescriptor`/`seek64`/`fromJava` | NOT imported | — |
+
+All 4 open callers build filenames dynamically on-stack (no literals);
+nearby constants are unrelated (crash keys, tick settings, client IDs).
+`getNextFileName` callers enumerate APK asset dirs at runtime. Full C++
+decompilation of the 4 open callers + `MainMenuScreenController` is running
+in Ghidra (`/ghidra/riru_trace.py`); results land in `/ghidra/out/`.
+
+## 6. v1.0.6 coverage matrix
 
 | Load path | Covered | How |
 | --------- | ------- | --- |
